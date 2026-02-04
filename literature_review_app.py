@@ -10,19 +10,8 @@ import google.generativeai as genai
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
-
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-model = genai.GenerativeModel("gemini-1.5-flash")
-
-st.title("Gemini Chat")
-
-user_input = st.text_input("Enter your message:")
-if user_input:
-    response = model.generate_content(user_input)
-    st.write(response.text)
+# Load environment variables from .env file (not .env.example)
+load_dotenv()  # load_dotenv() loads from .env file by default
 
 # Page configuration
 st.set_page_config(
@@ -36,6 +25,14 @@ if 'selected_articles' not in st.session_state:
     st.session_state.selected_articles = []
 if 'articles_data' not in st.session_state:
     st.session_state.articles_data = []
+if 'api_key_index' not in st.session_state:
+    st.session_state.api_key_index = 0  # For key rotation
+if 'api_keys' not in st.session_state:
+    st.session_state.api_keys = []
+if 'gemini_models' not in st.session_state:
+    st.session_state.gemini_models = []  # Store models for each key
+if 'gemini_errors' not in st.session_state:
+    st.session_state.gemini_errors = []  # Store detailed errors for each key
 
 def load_json_articles(file_path: str) -> List[Dict]:
     """Load articles from JSON file"""
@@ -97,6 +94,27 @@ def list_available_models(api_key: str):
     except Exception as e:
         return []
 
+def load_api_keys():
+    """Load all API keys from .env file (not .env.example)
+    Supports up to 3 keys: GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3
+    """
+    keys = []
+    # Load primary key from .env file
+    key1 = os.getenv("GEMINI_API_KEY", "")
+    if key1:
+        keys.append(key1)
+    
+    # Load additional keys from .env file
+    key2 = os.getenv("GEMINI_API_KEY_2", "")
+    if key2:
+        keys.append(key2)
+    
+    key3 = os.getenv("GEMINI_API_KEY_3", "")
+    if key3:
+        keys.append(key3)
+    
+    return keys
+
 def initialize_gemini(api_key: str):
     """Initialize Gemini AI with API key - automatically detects available models"""
     try:
@@ -123,14 +141,18 @@ def initialize_gemini(api_key: str):
             for preferred in preferred_models:
                 if preferred in available_models:
                     try:
-                        return genai.GenerativeModel(preferred)
+                        model = genai.GenerativeModel(preferred)
+                        model._api_key = api_key  # Store which key was used
+                        return model
                     except Exception as e:
                         continue
             
             # If no preferred model found, use first available
             if available_models:
                 try:
-                    return genai.GenerativeModel(available_models[0])
+                    model = genai.GenerativeModel(available_models[0])
+                    model._api_key = api_key
+                    return model
                 except Exception:
                     pass
         
@@ -149,55 +171,142 @@ def initialize_gemini(api_key: str):
             try:
                 # Just create the model - don't test it here
                 model = genai.GenerativeModel(model_name)
-                # Store the model name for debugging
+                # Store the model name and API key for debugging
                 model._model_name = model_name
+                model._api_key = api_key
                 return model
             except Exception as e:
                 last_error = str(e)
                 continue
         
-        # If all fail, log the error but return None
-        if last_error:
-            st.session_state.gemini_error = f"Could not initialize any model. Last error: {last_error[:200]}"
+        # If all fail, return None (error will be handled by caller)
         return None
         
     except Exception as e:
-        st.session_state.gemini_error = f"Error configuring Gemini: {str(e)[:200]}"
         return None
 
-def summarize_article(article: Dict, model) -> str:
-    """Use Gemini to generate a concise summary of an article"""
-    if not model:
-        return "Gemini API not configured. Please check your API key in .env file."
+def get_next_model():
+    """Get the next available model using key rotation"""
+    if not st.session_state.gemini_models:
+        return None
     
+    # Rotate through models
+    model = st.session_state.gemini_models[st.session_state.api_key_index]
+    # Move to next key for next call
+    st.session_state.api_key_index = (st.session_state.api_key_index + 1) % len(st.session_state.gemini_models)
+    return model
+
+def test_api_key(api_key: str, key_number: int) -> tuple:
+    """Test an API key and return (success: bool, error_message: str, model)"""
     try:
-        prompt = f"""Please provide a concise summary (2-3 sentences) of this research paper:
+        genai.configure(api_key=api_key)
+        
+        # Try to list models first (this validates the key)
+        try:
+            models_list = genai.list_models()
+            # Key is valid, now try to create a model
+        except Exception as list_error:
+            error_msg = str(list_error)
+            if "403" in error_msg or "permission" in error_msg.lower():
+                return False, f"Key {key_number}: Permission denied (403) - API key may not have Gemini API enabled", None
+            elif "401" in error_msg or "invalid" in error_msg.lower() or "unauthorized" in error_msg.lower():
+                return False, f"Key {key_number}: Invalid API key (401) - Check if key is correct", None
+            elif "429" in error_msg or "quota" in error_msg.lower():
+                return False, f"Key {key_number}: Quota exceeded (429) - Rate limit or quota reached", None
+            else:
+                return False, f"Key {key_number}: {error_msg[:200]}", None
+        
+        # Try to initialize a model
+        model = initialize_gemini(api_key)
+        if model:
+            return True, None, model
+        else:
+            return False, f"Key {key_number}: Could not initialize any model (tried multiple model names)", None
+            
+    except Exception as e:
+        error_msg = str(e)
+        if "403" in error_msg or "permission" in error_msg.lower():
+            return False, f"Key {key_number}: Permission denied (403) - Check API key permissions", None
+        elif "401" in error_msg or "invalid" in error_msg.lower() or "unauthorized" in error_msg.lower():
+            return False, f"Key {key_number}: Invalid API key (401) - Check if key is correct", None
+        elif "404" in error_msg:
+            return False, f"Key {key_number}: Model not found (404) - API key may not have access to this model", None
+        elif "429" in error_msg or "quota" in error_msg.lower():
+            return False, f"Key {key_number}: Quota exceeded (429) - Rate limit or quota reached", None
+        else:
+            return False, f"Key {key_number}: {error_msg[:200]}", None
+
+def initialize_all_gemini_models():
+    """Initialize Gemini models for all available API keys"""
+    api_keys = load_api_keys()
+    models = []
+    errors = []
+    
+    for i, api_key in enumerate(api_keys, 1):
+        success, error_msg, model = test_api_key(api_key, i)
+        if success and model:
+            models.append(model)
+        else:
+            errors.append(error_msg)
+    
+    st.session_state.gemini_models = models
+    st.session_state.gemini_errors = errors  # Store detailed errors
+    
+    if not models and errors:
+        st.session_state.gemini_error = "\n".join(errors)
+    
+    return models
+
+def summarize_article(article: Dict, model=None) -> str:
+    """Use Gemini to generate a concise summary of an article"""
+    if model is None:
+        model = get_next_model()
+    
+    if not model:
+        return "Gemini API not configured. Please check your API key(s) in .env file."
+    
+    # Try with current model, if fails try next available
+    for attempt in range(len(st.session_state.gemini_models) if st.session_state.gemini_models else 1):
+        try:
+            prompt = f"""Please provide a concise summary (2-3 sentences) of this research paper:
 
 Title: {article.get('title', 'N/A')}
 Abstract: {article.get('abstract', 'No abstract available')}
 
 Summary:"""
-        
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        error_msg = str(e)
-        # Provide helpful error message
-        if "404" in error_msg:
-            model_name = getattr(model, '_model_name', 'unknown')
-            return f"❌ Model '{model_name}' not found. Error: {error_msg[:200]}"
-        elif "403" in error_msg:
-            return f"❌ API key permission error. Please check your API key. Error: {error_msg[:200]}"
-        else:
-            return f"❌ Error generating summary: {error_msg[:200]}"
+            
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            error_msg = str(e)
+            # If rate limit or quota error, try next model
+            if ("429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower()) and st.session_state.gemini_models:
+                model = get_next_model()
+                continue
+            
+            # Provide helpful error message
+            if "404" in error_msg:
+                model_name = getattr(model, '_model_name', 'unknown')
+                return f"❌ Model '{model_name}' not found. Error: {error_msg[:200]}"
+            elif "403" in error_msg:
+                return f"❌ API key permission error. Please check your API key. Error: {error_msg[:200]}"
+            else:
+                return f"❌ Error generating summary: {error_msg[:200]}"
+    
+    return "❌ All API keys failed. Please check your API keys."
 
-def score_relevance(article: Dict, research_question: str, model) -> Dict:
+def score_relevance(article: Dict, research_question: str, model=None) -> Dict:
     """Use Gemini to score article relevance to a research question"""
+    if model is None:
+        model = get_next_model()
+    
     if not model:
         return {"score": 0, "reasoning": "Gemini API not configured"}
     
-    try:
-        prompt = f"""Rate the relevance of this research paper to the following research question on a scale of 1-10, and provide a brief explanation:
+    # Try with current model, if fails try next available
+    for attempt in range(len(st.session_state.gemini_models) if st.session_state.gemini_models else 1):
+        try:
+            prompt = f"""Rate the relevance of this research paper to the following research question on a scale of 1-10, and provide a brief explanation:
 
 Research Question: {research_question}
 
@@ -207,38 +316,50 @@ Abstract: {article.get('abstract', 'No abstract available')}
 Please respond in this format:
 Score: [1-10]
 Reasoning: [brief explanation]"""
-        
-        response = model.generate_content(prompt)
-        text = response.text
-        
-        # Parse response
-        score = 0
-        reasoning = text
-        if "Score:" in text:
-            try:
-                score = int(text.split("Score:")[1].split()[0])
-            except:
-                pass
-        if "Reasoning:" in text:
-            reasoning = text.split("Reasoning:")[1].strip()
-        
-        return {"score": score, "reasoning": reasoning}
-    except Exception as e:
-        return {"score": 0, "reasoning": f"Error: {str(e)}"}
-
-def ai_find_relevant_papers(user_query: str, articles: List[Dict], model, top_n: int = 5) -> Dict:
-    """Use Gemini AI to analyze user query and find/recommend relevant papers"""
-    if not model:
-        return {"error": "Gemini API not configured"}
+            
+            response = model.generate_content(prompt)
+            text = response.text
+            
+            # Parse response
+            score = 0
+            reasoning = text
+            if "Score:" in text:
+                try:
+                    score = int(text.split("Score:")[1].split()[0])
+                except:
+                    pass
+            if "Reasoning:" in text:
+                reasoning = text.split("Reasoning:")[1].strip()
+            
+            return {"score": score, "reasoning": reasoning}
+        except Exception as e:
+            error_msg = str(e)
+            # If rate limit or quota error, try next model
+            if ("429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower()) and st.session_state.gemini_models:
+                model = get_next_model()
+                continue
+            return {"score": 0, "reasoning": f"Error: {error_msg[:200]}"}
     
-    try:
-        # Create a summary of available articles
-        articles_summary = "\n\n".join([
-            f"Paper {i+1}:\nTitle: {article.get('title', 'N/A')}\nAbstract: {article.get('abstract', 'No abstract available')[:200]}..."
-            for i, article in enumerate(articles[:20])  # Limit to first 20 for context
-        ])
-        
-        prompt = f"""You are a research assistant helping to find relevant academic papers. 
+    return {"score": 0, "reasoning": "All API keys failed"}
+
+def ai_find_relevant_papers(user_query: str, articles: List[Dict], model=None, top_n: int = 5) -> Dict:
+    """Use Gemini AI to analyze user query and find/recommend relevant papers"""
+    if model is None:
+        model = get_next_model()
+    
+    if not model:
+        return {"error": "Gemini API not configured", "success": False}
+    
+    # Try with current model, if fails try next available
+    for attempt in range(len(st.session_state.gemini_models) if st.session_state.gemini_models else 1):
+        try:
+            # Create a summary of available articles
+            articles_summary = "\n\n".join([
+                f"Paper {i+1}:\nTitle: {article.get('title', 'N/A')}\nAbstract: {article.get('abstract', 'No abstract available')[:200]}..."
+                for i, article in enumerate(articles[:20])  # Limit to first 20 for context
+            ])
+            
+            prompt = f"""You are a research assistant helping to find relevant academic papers. 
 
 User's research interest/query: {user_query}
 
@@ -259,19 +380,31 @@ Relevance: [Why this paper is relevant]
 [Repeat for top papers]
 
 SEARCH_SUGGESTIONS: [Suggested keywords or search terms]"""
-        
-        response = model.generate_content(prompt)
-        return {"response": response.text, "success": True}
-    except Exception as e:
-        return {"error": f"Error: {str(e)}", "success": False}
-
-def ai_generate_search_query(user_query: str, model) -> Dict:
-    """Use Gemini to generate optimized search terms from natural language query"""
-    if not model:
-        return {"error": "Gemini API not configured. Please check your API key in .env file.", "success": False}
+            
+            response = model.generate_content(prompt)
+            return {"response": response.text, "success": True}
+        except Exception as e:
+            error_msg = str(e)
+            # If rate limit or quota error, try next model
+            if ("429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower()) and st.session_state.gemini_models:
+                model = get_next_model()
+                continue
+            return {"error": f"Error: {error_msg[:300]}", "success": False}
     
-    try:
-        prompt = f"""Convert this research interest into optimized search terms for academic paper databases:
+    return {"error": "All API keys failed", "success": False}
+
+def ai_generate_search_query(user_query: str, model=None) -> Dict:
+    """Use Gemini to generate optimized search terms from natural language query"""
+    if model is None:
+        model = get_next_model()
+    
+    if not model:
+        return {"error": "Gemini API not configured. Please check your API key(s) in .env file.", "success": False}
+    
+    # Try with current model, if fails try next available
+    for attempt in range(len(st.session_state.gemini_models) if st.session_state.gemini_models else 1):
+        try:
+            prompt = f"""Convert this research interest into optimized search terms for academic paper databases:
 
 User query: {user_query}
 
@@ -284,15 +417,22 @@ Format:
 MAIN_QUERY: [optimized search query]
 ALTERNATIVES: [alternative search terms]
 KEYWORDS: [related keywords]"""
-        
-        response = model.generate_content(prompt)
-        return {"response": response.text, "success": True}
-    except Exception as e:
-        error_msg = str(e)
-        if "404" in error_msg:
-            model_name = getattr(model, '_model_name', 'unknown')
-            return {"error": f"Model '{model_name}' not found. Please check your API key and model availability. Full error: {error_msg[:300]}", "success": False}
-        return {"error": f"Error: {error_msg[:300]}", "success": False}
+            
+            response = model.generate_content(prompt)
+            return {"response": response.text, "success": True}
+        except Exception as e:
+            error_msg = str(e)
+            # If rate limit or quota error, try next model
+            if ("429" in error_msg or "quota" in error_msg.lower() or "rate limit" in error_msg.lower()) and st.session_state.gemini_models:
+                model = get_next_model()
+                continue
+            
+            if "404" in error_msg:
+                model_name = getattr(model, '_model_name', 'unknown')
+                return {"error": f"Model '{model_name}' not found. Please check your API key and model availability. Full error: {error_msg[:300]}", "success": False}
+            return {"error": f"Error: {error_msg[:300]}", "success": False}
+    
+    return {"error": "All API keys failed", "success": False}
 
 def filter_articles(articles: List[Dict], search_query: str) -> List[Dict]:
     """Filter articles based on search query"""
@@ -313,7 +453,7 @@ def filter_articles(articles: List[Dict], search_query: str) -> List[Dict]:
     
     return filtered
 
-def display_article(article: Dict, index: int, gemini_model=None, research_question: str = None):
+def display_article(article: Dict, index: int, research_question: str = None):
     """Display a single article card"""
     with st.container():
         col1, col2 = st.columns([0.95, 0.05])
@@ -327,10 +467,10 @@ def display_article(article: Dict, index: int, gemini_model=None, research_quest
             st.markdown(metadata)
             
             # AI-powered relevance score (if Gemini is configured and research question provided)
-            if gemini_model and research_question:
+            if gemini_models and research_question:
                 if f"relevance_{index}" not in st.session_state:
                     with st.spinner("Analyzing relevance..."):
-                        relevance = score_relevance(article, research_question, gemini_model)
+                        relevance = score_relevance(article, research_question)
                         st.session_state[f"relevance_{index}"] = relevance
                 else:
                     relevance = st.session_state[f"relevance_{index}"]
@@ -346,10 +486,10 @@ def display_article(article: Dict, index: int, gemini_model=None, research_quest
             st.markdown(f"**Abstract:** {abstract[:300]}{'...' if len(abstract) > 300 else ''}")
             
             # AI summary button (if Gemini is configured)
-            if gemini_model:
+            if gemini_models:
                 if st.button(f"🤖 AI Summary", key=f"summary_btn_{index}"):
                     with st.spinner("Generating AI summary..."):
-                        summary = summarize_article(article, gemini_model)
+                        summary = summarize_article(article)
                         st.info(summary)
             
             # Keywords
@@ -382,33 +522,60 @@ with col1:
 with col2:
     st.metric("Selected Articles", len(st.session_state.selected_articles))
 
-# Initialize Gemini model automatically from .env
-env_api_key = os.getenv("GEMINI_API_KEY", "")
-gemini_model = None
-if env_api_key:
-    gemini_model = initialize_gemini(env_api_key)
-    # Show error if initialization failed
-    if not gemini_model:
+# Initialize Gemini models automatically from .env (supports multiple keys)
+api_keys = load_api_keys()
+gemini_models = []
+if api_keys:
+    gemini_models = initialize_all_gemini_models()
+    
+    # Show status
+    if gemini_models:
+        if len(gemini_models) > 1:
+            st.success(f"✅ Gemini API configured with {len(gemini_models)} API key(s) - load balancing enabled!")
+        else:
+            st.success("✅ Gemini API configured!")
+        
+        # Show warnings if some keys failed
+        errors = st.session_state.get('gemini_errors', [])
+        if errors and len(gemini_models) < len(api_keys):
+            with st.expander(f"⚠️ {len(errors)} API key(s) failed (Click to see details)", expanded=False):
+                for error in errors:
+                    st.warning(error)
+                st.info("💡 **Note:** The app will continue using the working key(s).")
+    else:
         error_msg = st.session_state.get('gemini_error', 'Unknown error')
-        with st.expander("⚠️ Gemini API Error (Click to see details)", expanded=False):
-            st.error(error_msg)
+        errors = st.session_state.get('gemini_errors', [])
+        
+        with st.expander("⚠️ All Gemini API Keys Failed (Click to see details)", expanded=True):
+            if errors:
+                st.error("**Detailed Errors:**")
+                for i, error in enumerate(errors, 1):
+                    st.error(f"{i}. {error}")
+            else:
+                st.error(error_msg)
+            
             st.info("💡 **Troubleshooting:**")
             st.markdown("""
-            1. Verify your API key is correct in `.env` file
-            2. Check your internet connection
-            3. Make sure the API key has proper permissions
-            4. Try using a different model name manually
+            1. **Verify API keys**: Check that your API keys in `.env` are correct and active
+            2. **Check API key format**: Keys should start with `AIza...` and be about 39 characters
+            3. **API key permissions**: Make sure your API keys have access to Gemini API
+            4. **Quota/Rate limits**: Check if you've exceeded your API quota
+            5. **Internet connection**: Ensure you have a stable internet connection
+            6. **Get new keys**: Visit https://makersuite.google.com/app/apikey to create new keys
+            
+            **Common Error Codes:**
+            - **401/403**: Invalid API key or permission denied
+            - **404**: Model not available for this API key
+            - **429**: Rate limit exceeded (try again later)
             """)
 
 # Main content area
 tab1, tab2 = st.tabs(["🔍 Search & Browse", "📋 Selected Articles"])
 
 with tab1:
-    # Show model debug info if Gemini is configured
-    if env_api_key and not gemini_model:
-        available = list_available_models(env_api_key)
-        if available:
-            st.info(f"💡 **Tip:** Available Gemini models detected: {', '.join(available[:3])}. The app will try to use one automatically.")
+    # Show status if multiple keys are configured
+    if len(api_keys) > 1 and gemini_models:
+        st.info(f"💡 **Load Balancing Active:** Using {len(gemini_models)} API key(s) - requests will be distributed automatically")
     
     # Data source selection
     data_source = st.radio(
@@ -428,7 +595,7 @@ with tab1:
     st.divider()
     
     # AI Assistant for finding relevant papers
-    if gemini_model:
+    if gemini_models:
         st.subheader("🤖 AI Research Assistant")
         ai_query = st.text_area(
             "Describe what papers you're looking for",
@@ -442,7 +609,7 @@ with tab1:
             if st.button("🔍 Generate Search Terms", use_container_width=True):
                 if ai_query:
                     with st.spinner("🤖 AI is analyzing your query..."):
-                        result = ai_generate_search_query(ai_query, gemini_model)
+                        result = ai_generate_search_query(ai_query)
                         if result.get("success"):
                             st.success("**AI-Generated Search Suggestions:**")
                             st.markdown(result["response"])
@@ -461,7 +628,7 @@ with tab1:
                 if ai_query:
                     if st.session_state.articles_data:
                         with st.spinner("🤖 AI is analyzing papers..."):
-                            result = ai_find_relevant_papers(ai_query, st.session_state.articles_data, gemini_model)
+                            result = ai_find_relevant_papers(ai_query, st.session_state.articles_data)
                             if result.get("success"):
                                 st.success("**AI Recommendations:**")
                                 st.markdown(result["response"])
@@ -480,7 +647,7 @@ with tab1:
             help="Optional: Enter a research question to get AI-powered relevance scores displayed on each article"
         )
     else:
-        st.info("💡 Add `GEMINI_API_KEY` to your .env file to enable AI features")
+        st.info("💡 Add `GEMINI_API_KEY` (and optionally `GEMINI_API_KEY_2`, `GEMINI_API_KEY_3`) to your .env file to enable AI features")
         research_question = None
     
     st.divider()
@@ -543,7 +710,7 @@ with tab1:
         
         # Display articles
         for original_idx, article in filtered_with_indices:
-            display_article(article, original_idx, gemini_model, research_question)
+            display_article(article, original_idx, research_question)
     else:
         st.info("No articles loaded. Select a data source and search for articles.")
 
