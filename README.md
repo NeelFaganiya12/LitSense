@@ -22,6 +22,17 @@ A Streamlit application for searching, selecting, and managing relevant literatu
 pip install -r requirements.txt
 ```
 
+2. Set up your Gemini API key (optional, for AI features):
+   - Copy `.env.example` to `.env`:
+     ```bash
+     cp .env.example .env
+     ```
+   - Edit `.env` and add your Gemini API key:
+     ```
+     GEMINI_API_KEY=your_actual_api_key_here
+     ```
+   - Get your API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+
 ## Usage
 
 ### Basic Usage (Local JSON File)
@@ -48,11 +59,22 @@ streamlit run literature_review_app.py
 
 To enable AI-powered features:
 
-1. Get a Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
-2. Enter your API key in the sidebar
-3. Enter your research question in the search tab
-4. Articles will be automatically scored for relevance
-5. Click "🤖 AI Summary" button on any article for an AI-generated summary
+1. **Set up API key** (choose one method):
+   - **Method 1 (Recommended)**: Add your API key to `.env` file:
+     ```
+     GEMINI_API_KEY=your_api_key_here
+     ```
+   - **Method 2**: Enter your API key manually in the sidebar
+   
+2. Get your API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+
+3. Once configured, the app will automatically load your API key from `.env`
+
+4. Enter your research question in the search tab
+
+5. Articles will be automatically scored for relevance
+
+6. Click "🤖 AI Summary" button on any article for an AI-generated summary
 
 ## File Structure
 
@@ -106,9 +128,11 @@ The `articles.json` file contains 20 sample articles with the following structur
 ## API Keys
 
 ### Gemini API
-- Get your API key: https://makersuite.google.com/app/apikey
-- Used for: Relevance scoring, article summarization
-- Optional: App works without it, but AI features won't be available
+- **Storage**: Store your API key in `.env` file (recommended) or enter manually in the app
+- **Get your API key**: https://makersuite.google.com/app/apikey
+- **Used for**: Relevance scoring, article summarization
+- **Optional**: App works without it, but AI features won't be available
+- **Security**: The `.env` file is gitignored to keep your API key secure
 
 ### Semantic Scholar API
 - No API key required for basic usage

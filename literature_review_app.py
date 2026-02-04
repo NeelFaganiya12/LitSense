@@ -4,7 +4,25 @@ import pandas as pd
 from typing import List, Dict
 import requests
 from datetime import datetime
+# Use the old API for now (more stable, widely available)
+# The new google.genai API requires different setup
 import google.generativeai as genai
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+model = genai.GenerativeModel("gemini-1.5-flash")
+
+st.title("Gemini Chat")
+
+user_input = st.text_input("Enter your message:")
+if user_input:
+    response = model.generate_content(user_input)
+    st.write(response.text)
 
 # Page configuration
 st.set_page_config(
@@ -64,19 +82,93 @@ def search_semantic_scholar(query: str, api_key: str = None, limit: int = 10) ->
         st.error(f"Error fetching from Semantic Scholar: {str(e)}")
         return []
 
-def initialize_gemini(api_key: str):
-    """Initialize Gemini AI with API key"""
+def list_available_models(api_key: str):
+    """List available Gemini models that support generateContent"""
     try:
         genai.configure(api_key=api_key)
-        return genai.GenerativeModel('gemini-pro')
+        models = genai.list_models()
+        available = []
+        for model in models:
+            if hasattr(model, 'supported_generation_methods') and 'generateContent' in model.supported_generation_methods:
+                # Extract model name (remove 'models/' prefix)
+                model_name = model.name.replace('models/', '')
+                available.append(model_name)
+        return available
     except Exception as e:
-        st.error(f"Error initializing Gemini: {str(e)}")
+        return []
+
+def initialize_gemini(api_key: str):
+    """Initialize Gemini AI with API key - automatically detects available models"""
+    try:
+        genai.configure(api_key=api_key)
+        
+        # Try to list available models first (may fail due to network issues)
+        available_models = []
+        try:
+            available_models = list_available_models(api_key)
+        except Exception:
+            # If listing fails, continue with fallback approach
+            pass
+        
+        if available_models:
+            # Prefer models in this order
+            preferred_models = [
+                'gemini-1.5-flash',  # Most commonly available
+                'gemini-1.5-pro',
+                'gemini-2.0-flash',
+                'gemini-pro'
+            ]
+            
+            # Find first available preferred model
+            for preferred in preferred_models:
+                if preferred in available_models:
+                    try:
+                        return genai.GenerativeModel(preferred)
+                    except Exception as e:
+                        continue
+            
+            # If no preferred model found, use first available
+            if available_models:
+                try:
+                    return genai.GenerativeModel(available_models[0])
+                except Exception:
+                    pass
+        
+        # Fallback: try common model names directly
+        # These are the most common model names (try in order)
+        model_names = [
+            'gemini-1.5-flash',  # Most commonly available
+            'gemini-1.5-pro',
+            'gemini-2.0-flash',
+            'gemini-pro',
+            'gemini-2.5-flash'  # Newer model
+        ]
+        
+        last_error = None
+        for model_name in model_names:
+            try:
+                # Just create the model - don't test it here
+                model = genai.GenerativeModel(model_name)
+                # Store the model name for debugging
+                model._model_name = model_name
+                return model
+            except Exception as e:
+                last_error = str(e)
+                continue
+        
+        # If all fail, log the error but return None
+        if last_error:
+            st.session_state.gemini_error = f"Could not initialize any model. Last error: {last_error[:200]}"
+        return None
+        
+    except Exception as e:
+        st.session_state.gemini_error = f"Error configuring Gemini: {str(e)[:200]}"
         return None
 
 def summarize_article(article: Dict, model) -> str:
     """Use Gemini to generate a concise summary of an article"""
     if not model:
-        return "Gemini API not configured"
+        return "Gemini API not configured. Please check your API key in .env file."
     
     try:
         prompt = f"""Please provide a concise summary (2-3 sentences) of this research paper:
@@ -89,7 +181,15 @@ Summary:"""
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Error generating summary: {str(e)}"
+        error_msg = str(e)
+        # Provide helpful error message
+        if "404" in error_msg:
+            model_name = getattr(model, '_model_name', 'unknown')
+            return f"❌ Model '{model_name}' not found. Error: {error_msg[:200]}"
+        elif "403" in error_msg:
+            return f"❌ API key permission error. Please check your API key. Error: {error_msg[:200]}"
+        else:
+            return f"❌ Error generating summary: {error_msg[:200]}"
 
 def score_relevance(article: Dict, research_question: str, model) -> Dict:
     """Use Gemini to score article relevance to a research question"""
@@ -125,6 +225,74 @@ Reasoning: [brief explanation]"""
         return {"score": score, "reasoning": reasoning}
     except Exception as e:
         return {"score": 0, "reasoning": f"Error: {str(e)}"}
+
+def ai_find_relevant_papers(user_query: str, articles: List[Dict], model, top_n: int = 5) -> Dict:
+    """Use Gemini AI to analyze user query and find/recommend relevant papers"""
+    if not model:
+        return {"error": "Gemini API not configured"}
+    
+    try:
+        # Create a summary of available articles
+        articles_summary = "\n\n".join([
+            f"Paper {i+1}:\nTitle: {article.get('title', 'N/A')}\nAbstract: {article.get('abstract', 'No abstract available')[:200]}..."
+            for i, article in enumerate(articles[:20])  # Limit to first 20 for context
+        ])
+        
+        prompt = f"""You are a research assistant helping to find relevant academic papers. 
+
+User's research interest/query: {user_query}
+
+Available papers:
+{articles_summary}
+
+Please:
+1. Analyze the user's query and identify key research themes
+2. Recommend the top {top_n} most relevant papers from the list above (by their number)
+3. For each recommended paper, explain why it's relevant
+4. Suggest additional search terms or keywords that might help find more papers
+
+Format your response as:
+ANALYSIS: [Your analysis of the research interest]
+RECOMMENDATIONS:
+Paper [number]: [Title]
+Relevance: [Why this paper is relevant]
+[Repeat for top papers]
+
+SEARCH_SUGGESTIONS: [Suggested keywords or search terms]"""
+        
+        response = model.generate_content(prompt)
+        return {"response": response.text, "success": True}
+    except Exception as e:
+        return {"error": f"Error: {str(e)}", "success": False}
+
+def ai_generate_search_query(user_query: str, model) -> Dict:
+    """Use Gemini to generate optimized search terms from natural language query"""
+    if not model:
+        return {"error": "Gemini API not configured. Please check your API key in .env file.", "success": False}
+    
+    try:
+        prompt = f"""Convert this research interest into optimized search terms for academic paper databases:
+
+User query: {user_query}
+
+Please provide:
+1. Main search query (concise, 3-5 key terms)
+2. Alternative search terms/variations
+3. Related keywords
+
+Format:
+MAIN_QUERY: [optimized search query]
+ALTERNATIVES: [alternative search terms]
+KEYWORDS: [related keywords]"""
+        
+        response = model.generate_content(prompt)
+        return {"response": response.text, "success": True}
+    except Exception as e:
+        error_msg = str(e)
+        if "404" in error_msg:
+            model_name = getattr(model, '_model_name', 'unknown')
+            return {"error": f"Model '{model_name}' not found. Please check your API key and model availability. Full error: {error_msg[:300]}", "success": False}
+        return {"error": f"Error: {error_msg[:300]}", "success": False}
 
 def filter_articles(articles: List[Dict], search_query: str) -> List[Dict]:
     """Filter articles based on search query"""
@@ -207,67 +375,135 @@ def display_article(article: Dict, index: int, gemini_model=None, research_quest
         st.divider()
 
 # Main app
-st.title("📚 Literature Review Assistant")
-st.markdown("Search and select relevant articles for your literature review")
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.title("📚 Literature Review Assistant")
+    st.markdown("Search and select relevant articles for your literature review")
+with col2:
+    st.metric("Selected Articles", len(st.session_state.selected_articles))
 
-# Sidebar for configuration
-with st.sidebar:
-    st.header("⚙️ Configuration")
+# Initialize Gemini model automatically from .env
+env_api_key = os.getenv("GEMINI_API_KEY", "")
+gemini_model = None
+if env_api_key:
+    gemini_model = initialize_gemini(env_api_key)
+    # Show error if initialization failed
+    if not gemini_model:
+        error_msg = st.session_state.get('gemini_error', 'Unknown error')
+        with st.expander("⚠️ Gemini API Error (Click to see details)", expanded=False):
+            st.error(error_msg)
+            st.info("💡 **Troubleshooting:**")
+            st.markdown("""
+            1. Verify your API key is correct in `.env` file
+            2. Check your internet connection
+            3. Make sure the API key has proper permissions
+            4. Try using a different model name manually
+            """)
+
+# Main content area
+tab1, tab2 = st.tabs(["🔍 Search & Browse", "📋 Selected Articles"])
+
+with tab1:
+    # Show model debug info if Gemini is configured
+    if env_api_key and not gemini_model:
+        available = list_available_models(env_api_key)
+        if available:
+            st.info(f"💡 **Tip:** Available Gemini models detected: {', '.join(available[:3])}. The app will try to use one automatically.")
     
     # Data source selection
     data_source = st.radio(
         "Data Source",
         ["Local JSON File", "Semantic Scholar API"],
-        help="Choose between local JSON file or live search via Semantic Scholar API"
+        help="Choose between local JSON file or live search via Semantic Scholar API",
+        horizontal=True
     )
-    
-    # Gemini API key (for AI features)
-    gemini_api_key = st.text_input(
-        "Gemini API Key (Optional)",
-        type="password",
-        help="Enter your Gemini API key for AI-powered features"
-    )
-    
-    gemini_model = None
-    if gemini_api_key:
-        gemini_model = initialize_gemini(gemini_api_key)
-        if gemini_model:
-            st.success("✅ Gemini API configured")
-        else:
-            st.error("❌ Failed to initialize Gemini")
-    
-    st.divider()
     
     # Filter options
-    st.header("🔍 Filters")
-    min_year = st.number_input("Minimum Year", value=2020, min_value=1900, max_value=2025)
-    min_citations = st.number_input("Minimum Citations", value=0, min_value=0)
+    col1, col2 = st.columns(2)
+    with col1:
+        min_year = st.number_input("Minimum Year", value=2020, min_value=1900, max_value=2025)
+    with col2:
+        min_citations = st.number_input("Minimum Citations", value=0, min_value=0)
     
     st.divider()
     
-    # Selected articles count
-    st.header("📋 Selection")
-    st.metric("Selected Articles", len(st.session_state.selected_articles))
-
-# Main content area
-tab1, tab2, tab3 = st.tabs(["🔍 Search & Browse", "📋 Selected Articles", "📊 Statistics"])
-
-with tab1:
-    # Research question for AI relevance scoring
-    research_question = None
+    # AI Assistant for finding relevant papers
     if gemini_model:
-        research_question = st.text_input(
-            "🎯 Research Question (for AI relevance scoring)",
-            placeholder="Enter your research question to get AI-powered relevance scores...",
-            help="Optional: Enter a research question to get AI-powered relevance scores for each article"
+        st.subheader("🤖 AI Research Assistant")
+        ai_query = st.text_area(
+            "Describe what papers you're looking for",
+            placeholder="E.g., 'I'm researching transformer architectures for natural language processing, specifically focusing on attention mechanisms and efficiency improvements'",
+            help="Describe your research interest in natural language. The AI will help find relevant papers and suggest search terms.",
+            height=100
         )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔍 Generate Search Terms", use_container_width=True):
+                if ai_query:
+                    with st.spinner("🤖 AI is analyzing your query..."):
+                        result = ai_generate_search_query(ai_query, gemini_model)
+                        if result.get("success"):
+                            st.success("**AI-Generated Search Suggestions:**")
+                            st.markdown(result["response"])
+                            # Extract main query if possible
+                            if "MAIN_QUERY:" in result["response"]:
+                                suggested_query = result["response"].split("MAIN_QUERY:")[1].split("\n")[0].strip()
+                                if st.button(f"Use: {suggested_query[:50]}..."):
+                                    st.session_state.suggested_search = suggested_query
+                        else:
+                            st.error(result.get("error", "Failed to generate search terms"))
+                else:
+                    st.warning("Please enter your research interest first")
+        
+        with col2:
+            if st.button("📚 Find Relevant Papers", use_container_width=True):
+                if ai_query:
+                    if st.session_state.articles_data:
+                        with st.spinner("🤖 AI is analyzing papers..."):
+                            result = ai_find_relevant_papers(ai_query, st.session_state.articles_data, gemini_model)
+                            if result.get("success"):
+                                st.success("**AI Recommendations:**")
+                                st.markdown(result["response"])
+                                st.session_state.ai_recommendations = result["response"]
+                            else:
+                                st.error(result.get("error", "Failed to analyze papers"))
+                    else:
+                        st.warning("Please load articles first (select data source and search)")
+                else:
+                    st.warning("Please enter your research interest first")
+        
+        # Research question for AI relevance scoring
+        research_question = st.text_input(
+            "🎯 Research Question (for relevance scoring on articles)",
+            placeholder="Enter a specific research question to get relevance scores on each article...",
+            help="Optional: Enter a research question to get AI-powered relevance scores displayed on each article"
+        )
+    else:
+        st.info("💡 Add `GEMINI_API_KEY` to your .env file to enable AI features")
+        research_question = None
+    
+    st.divider()
     
     # Search bar
     search_query = st.text_input(
         "🔍 Search Articles",
         placeholder="Search by title, author, keywords, or abstract...",
-        help="Enter keywords to search through articles"
+        help="Enter keywords to search through articles",
+        value=st.session_state.get("suggested_search", "")
     )
+    
+    # Clear suggested search after using it
+    if "suggested_search" in st.session_state:
+        del st.session_state.suggested_search
+    
+    # Display AI recommendations if available
+    if "ai_recommendations" in st.session_state and st.session_state.ai_recommendations:
+        with st.expander("🤖 AI Recommendations (Click to view)", expanded=True):
+            st.markdown(st.session_state.ai_recommendations)
+            if st.button("Clear Recommendations", key="clear_ai_recs"):
+                del st.session_state.ai_recommendations
+                st.rerun()
     
     # Load articles based on data source
     if data_source == "Local JSON File":
@@ -363,50 +599,3 @@ with tab2:
                 )
     else:
         st.info("No articles selected yet. Go to the Search & Browse tab to select articles.")
-
-with tab3:
-    st.header("📊 Statistics")
-    
-    if st.session_state.articles_data:
-        df = pd.DataFrame(st.session_state.articles_data)
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Articles", len(st.session_state.articles_data))
-        
-        with col2:
-            st.metric("Selected Articles", len(st.session_state.selected_articles))
-        
-        with col3:
-            if 'year' in df.columns:
-                avg_year = df['year'].mean()
-                st.metric("Average Year", f"{avg_year:.0f}" if pd.notna(avg_year) else "N/A")
-        
-        with col4:
-            if 'citations' in df.columns:
-                total_citations = df['citations'].sum()
-                st.metric("Total Citations", f"{total_citations:,}")
-        
-        # Charts
-        if len(df) > 0:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if 'year' in df.columns:
-                    st.subheader("Articles by Year")
-                    year_counts = df['year'].value_counts().sort_index()
-                    st.bar_chart(year_counts)
-            
-            with col2:
-                if 'citations' in df.columns:
-                    st.subheader("Citations Distribution")
-                    st.bar_chart(df['citations'].head(10))
-        
-        # Top venues
-        if 'venue' in df.columns:
-            st.subheader("Top Venues")
-            venue_counts = df['venue'].value_counts().head(10)
-            st.dataframe(venue_counts, use_container_width=True)
-    else:
-        st.info("Load articles to see statistics.")
