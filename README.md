@@ -23,11 +23,7 @@ pip install -r requirements.txt
 ```
 
 2. Set up your Gemini API key (optional, for AI features):
-   - Copy `.env.example` to `.env`:
-     ```bash
-     cp .env.example .env
-     ```
-   - Edit `.env` and add your Gemini API key:
+   - Create `.env` and add your Gemini API key:
      ```
      GEMINI_API_KEY=your_actual_api_key_here
      ```
@@ -39,7 +35,7 @@ pip install -r requirements.txt
 
 1. Run the application:
 ```bash
-streamlit run literature_review_app.py
+streamlit run app.py
 ```
 
 2. The app will load articles from `articles.json` by default
@@ -64,7 +60,6 @@ To enable AI-powered features:
      ```
      GEMINI_API_KEY=your_api_key_here
      ```
-   - **Method 2**: Enter your API key manually in the sidebar
    
 2. Get your API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
 
@@ -74,13 +69,13 @@ To enable AI-powered features:
 
 5. Articles will be automatically scored for relevance
 
-6. Click "🤖 AI Summary" button on any article for an AI-generated summary
+6. Click "AI Relevance" button on any article for an AI-generated summary
 
 ## File Structure
 
 ```
 streamlit/
-├── literature_review_app.py  # Main application
+├── app.py  # Main application
 ├── articles.json              # Sample articles data
 ├── requirements.txt           # Python dependencies
 └── README.md                  # This file
