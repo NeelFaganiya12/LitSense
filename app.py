@@ -103,15 +103,31 @@ filtered_papers = [p for p in papers if paper_matches(p)]
 # -----------------------------
 # AI helper
 # -----------------------------
-def explain_relevance(paper, query):
+def explain_relevance(paper, user_query=""):
+    # Construct the search query with paper information
+    authors_str = ", ".join(paper['authors'])
+    paper_info_query = f"Explain the relevance of this paper: {paper['title']} by {authors_str} ({paper['year']})"
+    
+    # Combine with user's search query if provided
+    if user_query and user_query.strip():
+        full_query = f"{paper_info_query}. User's research interest: {user_query}"
+    else:
+        full_query = paper_info_query
+    
     prompt = f"""
 You are helping a graduate student with a literature review.
 
 Search query:
-"{query}"
+"{full_query}"
 
 Paper title:
 "{paper['title']}"
+
+Authors:
+{", ".join(paper['authors'])}
+
+Year:
+{paper['year']}
 
 Abstract:
 "{paper['abstract']}"
@@ -119,8 +135,8 @@ Abstract:
 Keywords:
 {", ".join(paper['keywords'])}
 
-In 3–4 sentences, explain why this paper might be relevant to the search query.
-Focus on conceptual relevance, not summary.
+In 3–4 sentences, explain the conceptual relevance of this paper based on the search query.
+Focus on why this paper is relevant and what it contributes to the research area.
 """
     response = model.generate_content(prompt)
     return response.text.strip()
