@@ -1,6 +1,6 @@
 # LitSense 📚
 
-A Streamlit application for searching, organizing, and managing academic papers with AI-powered clustering, ranking, and relevance analysis.
+A Streamlit application for searching, organizing, and managing academic papers with AI-powered clustering, ranking, and relevance analysis. Designed for research studies comparing AI-assisted and baseline literature review interfaces.
 
 ## Features
 
@@ -16,19 +16,37 @@ A Streamlit application for searching, organizing, and managing academic papers 
 ### 📊 **Multi-Column Interface**
 - **Left Column**: Search & filter controls, data source selection, year filters
 - **Middle Column**: Results displayed in tabs:
-  - **Clusters Tab**: Papers organized into thematic groups (Local Papers only)
-  - **Review Queue Tab**: Papers ranked by AI-determined relevance
+  - **Clusters Tab**: Papers organized into thematic groups (Local Papers only, AI mode)
+  - **Review Queue Tab**: Papers ranked by AI-determined relevance (AI mode) or in search order (Baseline mode)
+  - **Reading List Tab**: All papers you've saved for later review
 - **Right Column**: Detailed paper view with metadata, abstract, and actions
 
 ### 📌 **Paper Management**
-- **Reading List**: Save papers to a persistent reading list
+- **Reading List**: Save papers to a persistent reading list (accessible via Reading List tab)
 - **Feedback System**: Mark papers as relevant or not relevant with optional notes
 - **Feedback Summary**: View all papers you've marked as relevant/not relevant in organized tabs
+
+### 🔬 **Study Modes**
+- **AI Mode**: Full feature set including AI clustering, relevance ranking, summarization, and relevance explanations
+- **Baseline Mode**: AI features disabled - papers shown in search result order without AI assistance
+- **Study Flow**: Complete task in one mode, then switch to the other mode for comparison
+
+### 📋 **Post-Task Survey**
+- Collects satisfaction metrics (satisfaction, ease of use, usefulness)
+- Measures cognitive load (mental demand, effort, frustration)
+- Includes open-ended feedback section
+- Survey responses logged alongside interaction data
 
 ### 💾 **Smart Caching**
 - Search results are cached to reduce API calls
 - Recent searches are accessible for quick access
 - Seamless switching between data sources
+
+### 📊 **Interaction Logging**
+- Comprehensive logging of all user interactions (searches, clicks, time spent, button usage, notes, feedback)
+- Anonymized participant IDs for privacy
+- Logs tagged with study mode (AI vs Baseline) for paired analysis
+- Logs saved locally to `logs/interaction_logs.json` (local development only)
 
 ## Installation
 
@@ -75,6 +93,14 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+### Study Mode Selection
+
+When you first launch the app, you'll be asked to choose a study mode:
+- **🤖 AI Mode**: Full interface with all AI features enabled
+- **📋 Baseline Mode**: Simplified interface without AI assistance
+
+You'll complete a task in one mode, then switch to the other mode to compare experiences. After each task, you'll complete a brief survey about your experience.
+
 ### Search Online Mode
 
 1. Select **"Search Online"** as the data source
@@ -99,24 +125,27 @@ streamlit run app.py
 
 ### Paper Details Panel
 
-When you click **"View"** on a paper, the right column shows:
+When you click on a paper title or **"View"** button, the right column shows:
 - **Title and Authors**: Full paper information
 - **Publication Details**: Journal, year, DOI, citation count
 - **Abstract**: Full abstract text
 - **Keywords/Fields of Study**: Research areas
-- **Actions**:
+- **Actions** (AI Mode only):
+  - **📝 Summarize**: Generate AI summary of the paper
+  - **🤖 Explain Relevance**: Get AI explanation of why the paper is relevant
+- **Actions** (Both modes):
   - **➕ Add to List**: Save to reading list
-  - **🤖 Explain Relevance**: Get AI explanation
 - **Feedback Section**:
   - Mark as **✅ Relevant** or **❌ Not Relevant**
   - Add optional notes
-  - View your feedback summary at the bottom of the page
+  - View your feedback summary in the Feedback Summary section
 
 ### Reading List
 
-- Located at the bottom of the page
-- Shows all papers you've added using "Add to List"
-- Remove papers with the **"Remove"** button
+- Accessible via the **Reading List** tab in the middle column
+- Shows all papers you've added using "➕ Add to List"
+- Click on paper titles to view details
+- Remove papers with the **"🗑️ Remove"** button
 - Persists across searches and sessions
 
 ### Feedback Summary
@@ -136,6 +165,8 @@ streamlit/
 ├── requirements.txt    # Python dependencies
 ├── .env                # API keys (create this file)
 ├── .env.example        # Template for .env file
+├── logs/               # Interaction logs (created automatically)
+│   └── interaction_logs.json
 └── README.md           # This file
 ```
 
@@ -194,21 +225,26 @@ streamlit/
 
 ## Example Workflow
 
-1. **Choose Data Source**: Select "Search Online" or "Local Papers"
-2. **Search**: Enter your research topic
-3. **Browse Results**: 
-   - View clusters (Local Papers) or ranked queue (both modes)
-   - Click "View" to see paper details
-4. **Get AI Insights**:
-   - See papers ranked by relevance
-   - Click "Explain Relevance" for AI explanations
-5. **Organize**:
-   - Add papers to reading list
+1. **Choose Study Mode**: Select AI Mode or Baseline Mode
+2. **Read Task Instructions**: Understand what you need to do
+3. **Choose Data Source**: Select "Search Online" or "Local Papers"
+4. **Search**: Enter your research topic
+5. **Browse Results**: 
+   - View clusters (Local Papers, AI mode) or ranked queue
+   - Click on paper titles to see details
+6. **Interact with Papers** (AI Mode):
+   - Use "Summarize" to get AI summaries
+   - Use "Explain Relevance" for AI explanations
+7. **Organize**:
+   - Add papers to reading list (Reading List tab)
    - Mark papers as relevant/not relevant
    - Add notes to papers
-6. **Review**:
-   - Check your reading list at the bottom
-   - View feedback summary (relevant/not relevant papers)
+8. **Complete Task**: Click "Complete Task" when finished
+9. **Complete Survey**: Answer questions about your experience
+10. **Switch Modes**: Complete the same task in the other mode
+11. **Review**:
+    - Check your reading list in the Reading List tab
+    - View feedback summary (relevant/not relevant papers)
 
 ## Troubleshooting
 
@@ -252,10 +288,22 @@ streamlit/
 - **Search API**: OpenAlex (free, no key required)
 - **State Management**: Streamlit session state for persistence
 - **Caching**: Built-in caching for search results and paper data
+- **Logging**: Interaction logs saved to `logs/interaction_logs.json` (local development only)
+- **Privacy**: Anonymized participant IDs, logs excluded from git via `.gitignore`
+
+## Logging & Data Collection
+
+The app automatically logs all user interactions for research purposes:
+- **What's logged**: Search queries, paper clicks, time spent per paper, button clicks (summarize, explain relevance), notes added, relevance markings, reading list actions, task completion time, and survey responses
+- **Privacy**: Each user gets an anonymized participant ID (e.g., P1A2B3C4D)
+- **Study tags**: All logs are tagged with study mode (AI vs Baseline) for paired analysis
+- **Storage**: Logs are saved to `logs/interaction_logs.json` locally
+- **Note**: Logs are collected locally only - deployed environments require cloud storage configuration (S3) for persistent logging
 
 ## Future Enhancements
 
 Potential features to add:
+- [ ] Cloud storage integration for deployed environments (S3, Google Cloud Storage)
 - [ ] Export reading list to BibTeX/CSV
 - [ ] PDF download integration
 - [ ] Citation network visualization
