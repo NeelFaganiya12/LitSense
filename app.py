@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from collections import defaultdict
 import re
+import uuid
+import time
 
 # -----------------------------
 # Load environment variables
@@ -43,6 +45,265 @@ def get_consistent_paper_id(paper):
         return str(paper["id"])
 
     return str(hash(f"{paper.get('title','')}_{paper.get('year','')}"))
+
+# -----------------------------
+# Logging Functions
+# -----------------------------
+def generate_participant_id():
+    """Generate an anonymized participant ID"""
+    return f"P{str(uuid.uuid4())[:8].upper()}"
+
+def get_log_file_path():
+    """Get the path to the log file"""
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, "interaction_logs.json")
+
+def is_deployed():
+    """Check if app is deployed (Streamlit Cloud, Heroku, etc.)"""
+    # Streamlit Cloud sets STREAMLIT_SERVER_PORT
+    # Heroku sets DYNO
+    # Other platforms may set PORT
+    return os.getenv("STREAMLIT_SERVER_PORT") is not None or \
+           os.getenv("DYNO") is not None or \
+           os.getenv("PORT") is not None
+
+def load_logs():
+    """Load existing logs from file"""
+    log_file = get_log_file_path()
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, 'r') as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_log(log_entry):
+    """Save a log entry to file or cloud storage"""
+    # Try cloud storage first if deployed and configured
+    if is_deployed():
+        # Check for cloud storage configuration
+        aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+        aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+        s3_bucket = os.getenv("S3_LOG_BUCKET")
+        
+        if aws_access_key and aws_secret_key and s3_bucket:
+            try:
+                save_log_to_s3(log_entry, s3_bucket)
+                return
+            except Exception as e:
+                # Fall back to local if S3 fails
+                pass
+    
+    # Default: save to local file
+    log_file = get_log_file_path()
+    logs = load_logs()
+    logs.append(log_entry)
+    
+    # Save to file
+    try:
+        with open(log_file, 'w') as f:
+            json.dump(logs, f, indent=2)
+    except Exception as e:
+        # Silently fail in deployed environments to avoid UI errors
+        if not is_deployed():
+            st.error(f"Error saving log: {str(e)}")
+
+def save_log_to_s3(log_entry, bucket_name):
+    """Save log entry to AWS S3 (requires boto3)"""
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+        
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
+        )
+        
+        # Load existing logs from S3
+        log_key = "interaction_logs.json"
+        logs = []
+        
+        try:
+            response = s3_client.get_object(Bucket=bucket_name, Key=log_key)
+            logs = json.loads(response['Body'].read().decode('utf-8'))
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'NoSuchKey':
+                raise
+        
+        # Append new log entry
+        logs.append(log_entry)
+        
+        # Upload back to S3
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=log_key,
+            Body=json.dumps(logs, indent=2).encode('utf-8'),
+            ContentType='application/json'
+        )
+    except ImportError:
+        # boto3 not installed - fall back to local
+        raise Exception("boto3 not installed")
+
+def log_interaction(event_type, **kwargs):
+    """Log a user interaction"""
+    if "participant_id" not in st.session_state:
+        return  # Don't log if participant ID not initialized
+    
+    log_entry = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "participant_id": st.session_state.participant_id,
+        "study_mode": st.session_state.study_mode,
+        "event_type": event_type,
+        **kwargs
+    }
+    
+    save_log(log_entry)
+
+def log_search_query(query, data_source, results_count):
+    """Log a search query"""
+    log_interaction(
+        event_type="search_query",
+        query=query,
+        data_source=data_source,
+        results_count=results_count
+    )
+
+def log_paper_click(paper_id, paper_title, source="results"):
+    """Log when a paper is clicked/viewed"""
+    # Track paper view start time
+    if "paper_view_times" not in st.session_state:
+        st.session_state.paper_view_times = {}
+    
+    st.session_state.paper_view_times[paper_id] = {
+        "start_time": time.time(),
+        "paper_title": paper_title
+    }
+    
+    log_interaction(
+        event_type="paper_click",
+        paper_id=paper_id,
+        paper_title=paper_title,
+        source=source
+    )
+
+def log_paper_view_end(paper_id):
+    """Log when user stops viewing a paper (to calculate time spent)"""
+    if "paper_view_times" not in st.session_state:
+        return
+    
+    if paper_id in st.session_state.paper_view_times:
+        start_time = st.session_state.paper_view_times[paper_id]["start_time"]
+        time_spent = time.time() - start_time
+        
+        log_interaction(
+            event_type="paper_view_time",
+            paper_id=paper_id,
+            paper_title=st.session_state.paper_view_times[paper_id]["paper_title"],
+            time_spent_seconds=round(time_spent, 2)
+        )
+        
+        # Remove from tracking
+        del st.session_state.paper_view_times[paper_id]
+
+def log_summarization(paper_id, paper_title):
+    """Log when summarization button is clicked"""
+    log_interaction(
+        event_type="summarization_click",
+        paper_id=paper_id,
+        paper_title=paper_title
+    )
+
+def log_explain_relevance(paper_id, paper_title):
+    """Log when explain relevance button is clicked"""
+    log_interaction(
+        event_type="explain_relevance_click",
+        paper_id=paper_id,
+        paper_title=paper_title
+    )
+
+def log_note_added(paper_id, paper_title, note_text):
+    """Log when a note is added to a paper"""
+    log_interaction(
+        event_type="note_added",
+        paper_id=paper_id,
+        paper_title=paper_title,
+        note_text=note_text[:200]  # Limit note length
+    )
+
+def log_relevance_marking(paper_id, paper_title, relevant, note_text=""):
+    """Log when a paper is marked as relevant or not relevant"""
+    log_interaction(
+        event_type="relevance_marking",
+        paper_id=paper_id,
+        paper_title=paper_title,
+        relevant=relevant,
+        note_text=note_text[:200] if note_text else ""
+    )
+
+def log_reading_list_add(paper_id, paper_title):
+    """Log when a paper is added to reading list"""
+    log_interaction(
+        event_type="reading_list_add",
+        paper_id=paper_id,
+        paper_title=paper_title
+    )
+
+def log_reading_list_remove(paper_id, paper_title):
+    """Log when a paper is removed from reading list"""
+    log_interaction(
+        event_type="reading_list_remove",
+        paper_id=paper_id,
+        paper_title=paper_title
+    )
+
+def handle_paper_selection(paper_id, paper_title, source="results"):
+    """Handle paper selection and log it"""
+    # Log end of previous paper view if switching papers
+    if st.session_state.previous_paper_id and st.session_state.previous_paper_id != paper_id:
+        log_paper_view_end(st.session_state.previous_paper_id)
+    
+    # Set new paper
+    st.session_state.previous_paper_id = paper_id
+    st.session_state.selected_paper_id = paper_id
+    
+    # Log new paper click
+    log_paper_click(paper_id, paper_title, source)
+
+def log_task_start():
+    """Log when task starts (after instructions)"""
+    if "task_start_time" not in st.session_state:
+        st.session_state.task_start_time = time.time()
+        log_interaction(
+            event_type="task_start",
+            timestamp=datetime.datetime.now().isoformat()
+        )
+
+def log_task_complete():
+    """Log when task is completed"""
+    if "task_start_time" in st.session_state:
+        task_duration = time.time() - st.session_state.task_start_time
+        log_interaction(
+            event_type="task_complete",
+            task_duration_seconds=round(task_duration, 2),
+            timestamp=datetime.datetime.now().isoformat()
+        )
+
+def log_survey_response(survey_data, mode):
+    """Log survey responses"""
+    log_interaction(
+        event_type="survey_response",
+        mode=mode,
+        satisfaction=survey_data.get("satisfaction"),
+        ease_of_use=survey_data.get("ease_of_use"),
+        usefulness=survey_data.get("usefulness"),
+        mental_demand=survey_data.get("mental_demand"),
+        effort=survey_data.get("effort"),
+        frustration=survey_data.get("frustration"),
+        feedback_text=survey_data.get("feedback_text", "")[:500]  # Limit feedback length
+    )
 
 # -----------------------------
 # OpenAlex API functions
@@ -410,6 +671,8 @@ Return only the numbers in order of relevance, separated by commas."""
 st.set_page_config(page_title="LitSense", layout="wide", initial_sidebar_state="collapsed")
 
 # Initialize session state
+if "participant_id" not in st.session_state:
+    st.session_state.participant_id = generate_participant_id()
 if "selected_papers" not in st.session_state:
     st.session_state.selected_papers = []
 if "ai_explanations" not in st.session_state:
@@ -426,6 +689,8 @@ if "rate_limit_time" not in st.session_state:
     st.session_state.rate_limit_time = None
 if "selected_paper_id" not in st.session_state:
     st.session_state.selected_paper_id = None
+if "previous_paper_id" not in st.session_state:
+    st.session_state.previous_paper_id = None  # Track previous paper for time calculation
 if "paper_feedback" not in st.session_state:
     st.session_state.paper_feedback = {}
 if "clusters" not in st.session_state:
@@ -453,6 +718,8 @@ if "completed_modes" not in st.session_state:
     st.session_state.completed_modes = []  # Track which modes have been completed
 if "first_survey_submitted" not in st.session_state:
     st.session_state.first_survey_submitted = False  # Track if first survey was submitted
+if "paper_view_times" not in st.session_state:
+    st.session_state.paper_view_times = {}  # Track time spent viewing papers
 
 # Study Mode Selection (only show if not set)
 if st.session_state.study_mode is None:
@@ -516,6 +783,7 @@ if st.session_state.show_instructions and not st.session_state.task_completed:
     
     if st.button("✅ I understand, start the task", use_container_width=True, type="primary"):
         st.session_state.show_instructions = False
+        log_task_start()  # Log task start
         st.rerun()
     
     st.stop()  # Stop here until user clicks the button
@@ -535,6 +803,10 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
             st.metric("Saved", len(st.session_state.selected_papers))
     with col_header3:
         if st.button("✅ Complete Task", use_container_width=True, type="primary"):
+            # Log end of current paper view if any
+            if st.session_state.previous_paper_id:
+                log_paper_view_end(st.session_state.previous_paper_id)
+            log_task_complete()  # Log task completion
             st.session_state.task_completed = True
             st.rerun()
 
@@ -708,8 +980,14 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                     query_lower in p.get('abstract', '').lower() or
                     any(query_lower in kw.lower() for kw in p.get('keywords', [])))
             ]
+            # Log local search query
+            if search_clicked:  # Only log when filter button is clicked
+                log_search_query(local_search_value, "Local Papers", len(papers))
         else:
             papers = all_local_papers
+            # Log initial load of all local papers
+            if data_source != st.session_state.get('last_data_source'):
+                log_search_query("", "Local Papers", len(papers))
         
         # Generate clusters and ranking for local papers (only if papers loaded and in AI mode)
         if papers:
@@ -751,6 +1029,8 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                 if papers:
                     st.session_state.cached_papers[search_query.lower()] = papers
                     st.session_state.last_search_query = search_query
+                    # Log search query
+                    log_search_query(search_query, "Search Online", len(papers))
                     
                     # Rank papers only in AI mode (clustering removed for online search due to issues)
                     if st.session_state.study_mode == "ai":
@@ -846,7 +1126,7 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                                             
                                             with col_paper1:
                                                 if st.button(f"📄 {paper['title'][:60]}...", key=unique_cluster_key, use_container_width=True):
-                                                    st.session_state.selected_paper_id = paper_id
+                                                    handle_paper_selection(paper_id, paper['title'], source="clusters")
                                                     st.rerun()
                                             
                                             with col_paper2:
@@ -887,7 +1167,7 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                             with col_q1:
                                 # Make title clickable (like local papers)
                                 if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_key, use_container_width=True):
-                                    st.session_state.selected_paper_id = paper_id
+                                    handle_paper_selection(paper_id, paper['title'], source="review_queue")
                                     st.rerun()
                                 st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
                                 if paper.get('citation_count'):
@@ -914,12 +1194,13 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                             
                             with col_r1:
                                 if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_reading_key, use_container_width=True):
-                                    st.session_state.selected_paper_id = paper_id
+                                    handle_paper_selection(paper_id, paper['title'], source="reading_list")
                                     st.rerun()
                                 st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
                             
                             with col_r2:
                                 if st.button("🗑️ Remove", key=f"remove_local_{paper_id}", use_container_width=True):
+                                    log_reading_list_remove(paper_id, paper['title'])
                                     st.session_state.selected_papers = [p for p in st.session_state.selected_papers if get_consistent_paper_id(p) != paper_id]
                                     st.rerun()
                             
@@ -969,7 +1250,7 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                             with col_q1:
                                 # Make title clickable (like local papers)
                                 if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_key, use_container_width=True):
-                                    st.session_state.selected_paper_id = paper_id
+                                    handle_paper_selection(paper_id, paper['title'], source="review_queue")
                                     st.rerun()
                                 st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
                                 if paper.get('citation_count'):
@@ -996,7 +1277,7 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                             
                             with col_r1:
                                 if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_reading_key, use_container_width=True):
-                                    st.session_state.selected_paper_id = paper_id
+                                    handle_paper_selection(paper_id, paper['title'], source="reading_list")
                                     st.rerun()
                                 st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
                             
@@ -1143,12 +1424,14 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                 if st.button("➕ Add to List", key=f"add_{paper_id}", use_container_width=True, type="primary"):
                     if selected_paper not in st.session_state.selected_papers:
                         st.session_state.selected_papers.append(selected_paper)
+                        log_reading_list_add(paper_id, selected_paper['title'])
                         st.success("Added!")
                         st.rerun()
             
             if st.session_state.study_mode == "ai":
                 with col_btn2:
                     if st.button("📝 Summarize", key=f"summarize_{paper_id}", use_container_width=True):
+                        log_summarization(paper_id, selected_paper['title'])
                         with st.spinner("Generating summary..."):
                             try:
                                 summary = summarize_paper(selected_paper)
@@ -1160,6 +1443,7 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                 
                 with col_btn3:
                     if st.button("🤖 Explain Relevance", key=f"explain_{paper_id}", use_container_width=True):
+                        log_explain_relevance(paper_id, selected_paper['title'])
                         with st.spinner("Generating explanation..."):
                             try:
                                 # Use appropriate query based on data source
@@ -1225,11 +1509,15 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
             col_fb1, col_fb2 = st.columns(2)
             with col_fb1:
                 if st.button("✅ Relevant", key=f"rel_{paper_id}", use_container_width=True):
+                    note_text = st.session_state.paper_feedback[feedback_key].get("note", "")
                     st.session_state.paper_feedback[feedback_key]["relevant"] = True
+                    log_relevance_marking(paper_id, selected_paper['title'], True, note_text)
                     st.success("Marked as relevant!")
             with col_fb2:
                 if st.button("❌ Not Relevant", key=f"notrel_{paper_id}", use_container_width=True):
+                    note_text = st.session_state.paper_feedback[feedback_key].get("note", "")
                     st.session_state.paper_feedback[feedback_key]["relevant"] = False
+                    log_relevance_marking(paper_id, selected_paper['title'], False, note_text)
                     st.info("Marked as not relevant")
             
             # Show current feedback status
@@ -1241,6 +1529,8 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
             note = st.text_area("Quick note (optional)", key=f"note_{paper_id}", height=80)
             if st.button("💾 Save Note", key=f"save_note_{paper_id}"):
                 st.session_state.paper_feedback[feedback_key]["note"] = note
+                if note:  # Only log if note is not empty
+                    log_note_added(paper_id, selected_paper['title'], note)
                 st.success("Note saved!")
         
         else:
@@ -1389,6 +1679,9 @@ if st.session_state.task_completed and not st.session_state.survey_completed:
                 "condition": st.session_state.study_condition
             }
             
+            # Log survey response
+            log_survey_response(survey_results, st.session_state.study_mode)
+            
             # Mark current mode as completed
             st.session_state.completed_modes.append(st.session_state.study_mode)
             
@@ -1417,6 +1710,9 @@ if st.session_state.task_completed and not st.session_state.survey_completed:
                 "mode": st.session_state.study_mode,
                 "condition": st.session_state.study_condition
             }
+            
+            # Log survey response
+            log_survey_response(survey_results, st.session_state.study_mode)
             
             # Mark current mode as completed
             if st.session_state.study_mode not in st.session_state.completed_modes:
@@ -1573,7 +1869,7 @@ if relevant_papers or not_relevant_papers:
                             st.info(f"📝 **Your Note:** {note}")
                     with col_fb2:
                         if st.button("View", key=f"view_fb_notrel_{paper_id}", use_container_width=True):
-                            st.session_state.selected_paper_id = paper_id
+                            handle_paper_selection(paper_id, paper.get('title', 'Untitled'), source="feedback_not_relevant")
                             st.rerun()
         else:
             st.info("No papers marked as not relevant yet. Use the '❌ Not Relevant' button on paper details to mark papers.")

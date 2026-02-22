@@ -25,3 +25,7 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs (contains user interaction data)
+logs/
+*.log
