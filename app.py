@@ -801,163 +801,219 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
         if 'current_papers' in st.session_state:
             del st.session_state.current_papers
     
-    # Display results
-    # Ensure papers list doesn't have duplicates before displaying
-    if papers:
-        # Remove duplicates from papers list
-        seen_paper_ids = set()
-        unique_papers = []
-        for p in papers:
-            paper_id = get_consistent_paper_id(p)
-            if paper_id not in seen_paper_ids:
-                seen_paper_ids.add(paper_id)
-                unique_papers.append(p)
-        papers = unique_papers
-        
-        st.header(f"📄 {len(papers)} Papers Found")
-        
-        # For Local Papers: Show Clusters (only in AI mode) and Review Queue
-        # For Search Online: Show only Review Queue (clustering has issues)
-        if data_source == "Local Papers":
-            # Tabs for Clusters (AI mode only) and Review Queue
-            if st.session_state.study_mode == "ai":
-                tab_clusters, tab_queue = st.tabs(["📚 Clusters", "📋 Review Queue"])
-            else:
-                tab_queue = st.tabs(["📋 Review Queue"])[0]
-                tab_clusters = None
-            
-            if tab_clusters:
-                with tab_clusters:
-                    if st.session_state.clusters:
-                        for cluster_name, cluster_data in st.session_state.clusters.items():
-                            cluster_papers_list = [papers[i] for i in cluster_data["papers"] if 0 <= i < len(papers)]
-                            if cluster_papers_list:
-                                with st.expander(f"**{cluster_name}** ({len(cluster_papers_list)} papers)", expanded=False):
-                                    if cluster_data.get("topics"):
-                                        st.caption(f"Topics: {', '.join(cluster_data['topics'][:5])}")
-                                    
-                                    for cluster_idx, paper in enumerate(cluster_papers_list):
-                                        # Get paper ID using consistent function
-                                        paper_id = get_consistent_paper_id(paper)
-                                        # Create unique key using cluster name and index
-                                        unique_cluster_key = f"select_{cluster_name}_{cluster_idx}_{paper_id}"
-                                        col_paper1, col_paper2 = st.columns([4, 1])
-                                        
-                                        with col_paper1:
-                                            if st.button(f"📄 {paper['title'][:60]}...", key=unique_cluster_key, use_container_width=True):
-                                                st.session_state.selected_paper_id = paper_id
-                                                st.rerun()
-                                        
-                                        with col_paper2:
-                                            if paper.get('citation_count'):
-                                                st.caption(f"⭐ {paper['citation_count']}")
-                                        
-                                        journal_display = paper.get('journal', 'N/A')
-                                        if paper.get('volume') or paper.get('issue'):
-                                            journal_display += f" ({paper.get('year', 'N/A')})"
-                                        else:
-                                            journal_display += f" • {paper.get('year', 'N/A')}"
-                                        st.caption(journal_display)
-                                        st.divider()
-                    else:
-                        st.info("Clustering in progress...")
-            
-            with tab_queue:
-                if st.session_state.study_mode == "ai":
-                    ranked = st.session_state.ranked_papers if st.session_state.ranked_papers else papers
-                    st.caption("Papers ranked by relevance to your search")
-                else:
-                    ranked = papers
-                    st.caption("Papers (in search result order)")
-                
-                for idx, paper in enumerate(ranked, 1):
-                    # Get paper ID using consistent function
-                    paper_id = get_consistent_paper_id(paper)
-                    # Create unique key using index to avoid duplicates
-                    unique_key = f"view_queue_{idx}_{paper_id}"
-                    
-                    # Paper card
-                    paper_selected = st.session_state.selected_paper_id == paper_id
-                    card_style = "border: 2px solid #1f77b4;" if paper_selected else ""
-                    
-                    with st.container():
-                        col_q1, col_q2 = st.columns([4, 1])
-                        
-                        with col_q1:
-                            # Make title clickable (like local papers)
-                            if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_key, use_container_width=True):
-                                st.session_state.selected_paper_id = paper_id
-                                st.rerun()
-                            st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
-                            if paper.get('citation_count'):
-                                st.caption(f"⭐ {paper['citation_count']} citations")
-                            elif paper.get('keywords'):
-                                st.caption(f"🏷️ {', '.join(paper['keywords'][:3])}")
-                        
-                        with col_q2:
-                            # Show citation count or other info in right column
-                            if paper.get('citation_count'):
-                                st.caption(f"⭐ {paper['citation_count']}")
-                        
-                        st.divider()
-        else:
-            # Search Online: Only Review Queue (no clusters)
-            # In AI mode: use ranked papers if available, otherwise use papers
-            # In Baseline mode: always use original papers (no AI ranking)
-            if st.session_state.study_mode == "ai":
-                if st.session_state.ranked_papers:
-                    ranked = st.session_state.ranked_papers
-                else:
-                    ranked = papers
-                st.caption("Papers ranked by relevance to your search")
-            else:
-                # Baseline mode: use original order, ignore any existing ranked_papers
-                ranked = papers
-                st.caption("Papers (in search result order)")
-            
-            # Remove duplicates based on paper ID
+    # Display results (inside column)
+    with col_results:
+        # Ensure papers list doesn't have duplicates before displaying
+        if papers:
+            # Remove duplicates from papers list
             seen_paper_ids = set()
-            unique_ranked = []
-            for paper in ranked:
-                paper_id = get_consistent_paper_id(paper)
+            unique_papers = []
+            for p in papers:
+                paper_id = get_consistent_paper_id(p)
                 if paper_id not in seen_paper_ids:
                     seen_paper_ids.add(paper_id)
-                    unique_ranked.append(paper)
+                    unique_papers.append(p)
+            papers = unique_papers
             
-            for idx, paper in enumerate(unique_ranked, 1):
-                # Get paper ID using consistent function
-                paper_id = get_consistent_paper_id(paper)
-                # Create unique key using index to avoid duplicates
-                unique_key = f"view_scholar_{idx}_{paper_id}"
+            st.header(f"📄 {len(papers)} Papers Found")
+            
+            # For Local Papers: Show Clusters (only in AI mode), Review Queue, and Reading List
+            # For Search Online: Show Review Queue and Reading List
+            if data_source == "Local Papers":
+                # Tabs for Clusters (AI mode only), Review Queue, and Reading List
+                if st.session_state.study_mode == "ai":
+                    tab_clusters, tab_queue, tab_reading = st.tabs(["📚 Clusters", "📋 Review Queue", "📖 Reading List"])
+                else:
+                    tab_queue, tab_reading = st.tabs(["📋 Review Queue", "📖 Reading List"])
+                    tab_clusters = None
                 
-                # Paper card - clickable title like in local papers
-                paper_selected = st.session_state.selected_paper_id == paper_id
+                if tab_clusters:
+                    with tab_clusters:
+                        if st.session_state.clusters:
+                            for cluster_name, cluster_data in st.session_state.clusters.items():
+                                cluster_papers_list = [papers[i] for i in cluster_data["papers"] if 0 <= i < len(papers)]
+                                if cluster_papers_list:
+                                    with st.expander(f"**{cluster_name}** ({len(cluster_papers_list)} papers)", expanded=False):
+                                        if cluster_data.get("topics"):
+                                            st.caption(f"Topics: {', '.join(cluster_data['topics'][:5])}")
+                                        
+                                        for cluster_idx, paper in enumerate(cluster_papers_list):
+                                            # Get paper ID using consistent function
+                                            paper_id = get_consistent_paper_id(paper)
+                                            # Create unique key using cluster name and index
+                                            unique_cluster_key = f"select_{cluster_name}_{cluster_idx}_{paper_id}"
+                                            col_paper1, col_paper2 = st.columns([4, 1])
+                                            
+                                            with col_paper1:
+                                                if st.button(f"📄 {paper['title'][:60]}...", key=unique_cluster_key, use_container_width=True):
+                                                    st.session_state.selected_paper_id = paper_id
+                                                    st.rerun()
+                                            
+                                            with col_paper2:
+                                                if paper.get('citation_count'):
+                                                    st.caption(f"⭐ {paper['citation_count']}")
+                                            
+                                            journal_display = paper.get('journal', 'N/A')
+                                            if paper.get('volume') or paper.get('issue'):
+                                                journal_display += f" ({paper.get('year', 'N/A')})"
+                                            else:
+                                                journal_display += f" • {paper.get('year', 'N/A')}"
+                                            st.caption(journal_display)
+                                            st.divider()
+                        else:
+                            st.info("Clustering in progress...")
                 
-                with st.container():
-                    col_q1, col_q2 = st.columns([4, 1])
+                with tab_queue:
+                    if st.session_state.study_mode == "ai":
+                        ranked = st.session_state.ranked_papers if st.session_state.ranked_papers else papers
+                        st.caption("Papers ranked by relevance to your search")
+                    else:
+                        ranked = papers
+                        st.caption("Papers (in search result order)")
                     
-                    with col_q1:
-                        # Make title clickable (like local papers)
-                        if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_key, use_container_width=True):
-                            st.session_state.selected_paper_id = paper_id
-                            st.rerun()
-                        st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
-                        if paper.get('citation_count'):
-                            st.caption(f"⭐ {paper['citation_count']} citations")
-                        elif paper.get('keywords'):
-                            st.caption(f"🏷️ {', '.join(paper['keywords'][:3])}")
+                    for idx, paper in enumerate(ranked, 1):
+                        # Get paper ID using consistent function
+                        paper_id = get_consistent_paper_id(paper)
+                        # Create unique key using index to avoid duplicates
+                        unique_key = f"view_queue_{idx}_{paper_id}"
+                        
+                        # Paper card
+                        paper_selected = st.session_state.selected_paper_id == paper_id
+                        card_style = "border: 2px solid #1f77b4;" if paper_selected else ""
+                        
+                        with st.container():
+                            col_q1, col_q2 = st.columns([4, 1])
+                            
+                            with col_q1:
+                                # Make title clickable (like local papers)
+                                if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_key, use_container_width=True):
+                                    st.session_state.selected_paper_id = paper_id
+                                    st.rerun()
+                                st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
+                                if paper.get('citation_count'):
+                                    st.caption(f"⭐ {paper['citation_count']} citations")
+                                elif paper.get('keywords'):
+                                    st.caption(f"🏷️ {', '.join(paper['keywords'][:3])}")
+                            
+                            with col_q2:
+                                # Show citation count or other info in right column
+                                if paper.get('citation_count'):
+                                    st.caption(f"⭐ {paper['citation_count']}")
+                            
+                            st.divider()
+                
+                # Reading List tab for Local Papers
+                with tab_reading:
+                    if st.session_state.selected_papers:
+                        st.caption(f"You have {len(st.session_state.selected_papers)} paper(s) in your reading list.")
+                        for idx, paper in enumerate(st.session_state.selected_papers, 1):
+                            paper_id = get_consistent_paper_id(paper)
+                            unique_reading_key = f"reading_local_{idx}_{paper_id}"
+                            
+                            col_r1, col_r2 = st.columns([4, 1])
+                            
+                            with col_r1:
+                                if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_reading_key, use_container_width=True):
+                                    st.session_state.selected_paper_id = paper_id
+                                    st.rerun()
+                                st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
+                            
+                            with col_r2:
+                                if st.button("🗑️ Remove", key=f"remove_local_{paper_id}", use_container_width=True):
+                                    st.session_state.selected_papers = [p for p in st.session_state.selected_papers if get_consistent_paper_id(p) != paper_id]
+                                    st.rerun()
+                            
+                            st.divider()
+                    else:
+                        st.info("📖 Your reading list is empty. Add papers using the '➕ Add to List' button in paper details.")
+            else:
+                # Search Online: Review Queue and Reading List (no clusters)
+                tab_queue, tab_reading = st.tabs(["📋 Review Queue", "📖 Reading List"])
+                
+                # Review Queue tab content
+                with tab_queue:
+                    # In AI mode: use ranked papers if available, otherwise use papers
+                    # In Baseline mode: always use original papers (no AI ranking)
+                    if st.session_state.study_mode == "ai":
+                        if st.session_state.ranked_papers:
+                            ranked = st.session_state.ranked_papers
+                        else:
+                            ranked = papers
+                        st.caption("Papers ranked by relevance to your search")
+                    else:
+                        # Baseline mode: use original order, ignore any existing ranked_papers
+                        ranked = papers
+                        st.caption("Papers (in search result order)")
                     
-                    with col_q2:
-                        # Show citation count or other info in right column
-                        if paper.get('citation_count'):
-                            st.caption(f"⭐ {paper['citation_count']}")
+                    # Remove duplicates based on paper ID
+                    seen_paper_ids = set()
+                    unique_ranked = []
+                    for paper in ranked:
+                        paper_id = get_consistent_paper_id(paper)
+                        if paper_id not in seen_paper_ids:
+                            seen_paper_ids.add(paper_id)
+                            unique_ranked.append(paper)
                     
-                    st.divider()
-    else:
-        if data_source == "Local Papers":
-            st.info("📚 **Local Papers Mode**\n\nAll local papers are shown. Use the filter box to search within them.")
+                    for idx, paper in enumerate(unique_ranked, 1):
+                        # Get paper ID using consistent function
+                        paper_id = get_consistent_paper_id(paper)
+                        # Create unique key using index to avoid duplicates
+                        unique_key = f"view_scholar_{idx}_{paper_id}"
+                        
+                        # Paper card - clickable title like in local papers
+                        paper_selected = st.session_state.selected_paper_id == paper_id
+                        
+                        with st.container():
+                            col_q1, col_q2 = st.columns([4, 1])
+                            
+                            with col_q1:
+                                # Make title clickable (like local papers)
+                                if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_key, use_container_width=True):
+                                    st.session_state.selected_paper_id = paper_id
+                                    st.rerun()
+                                st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
+                                if paper.get('citation_count'):
+                                    st.caption(f"⭐ {paper['citation_count']} citations")
+                                elif paper.get('keywords'):
+                                    st.caption(f"🏷️ {', '.join(paper['keywords'][:3])}")
+                            
+                            with col_q2:
+                                # Show citation count or other info in right column
+                                if paper.get('citation_count'):
+                                    st.caption(f"⭐ {paper['citation_count']}")
+                            
+                            st.divider()
+                
+                # Reading List tab for Search Online
+                with tab_reading:
+                    if st.session_state.selected_papers:
+                        st.caption(f"You have {len(st.session_state.selected_papers)} paper(s) in your reading list.")
+                        for idx, paper in enumerate(st.session_state.selected_papers, 1):
+                            paper_id = get_consistent_paper_id(paper)
+                            unique_reading_key = f"reading_online_{idx}_{paper_id}"
+                            
+                            col_r1, col_r2 = st.columns([4, 1])
+                            
+                            with col_r1:
+                                if st.button(f"📄 {idx}. {paper['title'][:70]}...", key=unique_reading_key, use_container_width=True):
+                                    st.session_state.selected_paper_id = paper_id
+                                    st.rerun()
+                                st.caption(f"{', '.join(paper.get('authors', ['Unknown'])[:3])} • {paper.get('journal', 'N/A')} • {paper.get('year', 'N/A')}")
+                            
+                            with col_r2:
+                                if st.button("🗑️ Remove", key=f"remove_online_{paper_id}", use_container_width=True):
+                                    st.session_state.selected_papers = [p for p in st.session_state.selected_papers if get_consistent_paper_id(p) != paper_id]
+                                    st.rerun()
+                            
+                            st.divider()
+                    else:
+                        st.info("📖 Your reading list is empty. Add papers using the '➕ Add to List' button in paper details.")
         else:
-            st.info("👆 Enter a search query to find papers online")
+            # No papers found
+            if data_source == "Local Papers":
+                st.info("📚 **Local Papers Mode**\n\nAll local papers are shown. Use the filter box to search within them.")
+            else:
+                st.info("👆 Enter a search query to find papers online")
 
     # ==================== RIGHT COLUMN: SELECTED PAPER DETAILS ====================
     with col_details:
@@ -1200,121 +1256,6 @@ if not st.session_state.task_completed and not st.session_state.show_instruction
                     st.info("👈 Search for papers online to view details")
             else:
                 st.info("👈 Select a paper from the results to view details")
-
-    # ==================== BOTTOM: READING LIST ====================
-    st.divider()
-    st.header("📌 Your Reading List")
-
-    if st.session_state.selected_papers:
-        for idx, p in enumerate(st.session_state.selected_papers, 1):
-            col_list1, col_list2 = st.columns([4, 1])
-            with col_list1:
-                st.markdown(f"{idx}. **{p['title']}** ({p.get('year', 'N/A')}) — {p.get('journal', 'N/A')}")
-            with col_list2:
-                if st.button("Remove", key=f"remove_{idx}"):
-                    st.session_state.selected_papers.remove(p)
-                    st.rerun()
-    else:
-        st.caption("No papers in your reading list yet. Add papers using the 'Add to List' button.")
-
-    # ==================== FEEDBACK SUMMARY SECTION ====================
-    st.divider()
-    st.header("📊 Your Feedback Summary")
-
-    # Collect all papers with feedback
-    def get_papers_with_feedback():
-        """Collect all papers that have been marked as relevant or not relevant"""
-        relevant_papers = []
-        not_relevant_papers = []
-        
-        # Get all papers from cached searches and current papers
-        all_available_papers = []
-        if st.session_state.get('current_papers'):
-            all_available_papers.extend(st.session_state.current_papers)
-        for cached_papers_list in st.session_state.cached_papers.values():
-            all_available_papers.extend(cached_papers_list)
-        
-        # Remove duplicates based on paper ID
-        seen_ids = set()
-        unique_papers = []
-        for p in all_available_papers:
-            paper_id = get_consistent_paper_id(p)
-            if paper_id not in seen_ids:
-                seen_ids.add(paper_id)
-                unique_papers.append(p)
-        
-        # Check feedback for each paper
-        for paper in unique_papers:
-            paper_id = get_consistent_paper_id(paper)
-            feedback_key = f"feedback_{paper_id}"
-            
-            if feedback_key in st.session_state.paper_feedback:
-                feedback = st.session_state.paper_feedback[feedback_key]
-                if feedback.get("relevant") is True:
-                    relevant_papers.append({
-                        "paper": paper,
-                        "note": feedback.get("note", "")
-                    })
-                elif feedback.get("relevant") is False:
-                    not_relevant_papers.append({
-                        "paper": paper,
-                        "note": feedback.get("note", "")
-                    })
-        
-        return relevant_papers, not_relevant_papers
-
-    # Get papers with feedback
-    relevant_papers, not_relevant_papers = get_papers_with_feedback()
-
-    if relevant_papers or not_relevant_papers:
-        tab_relevant, tab_not_relevant = st.tabs([
-            f"✅ Relevant ({len(relevant_papers)})",
-            f"❌ Not Relevant ({len(not_relevant_papers)})"
-        ])
-        
-        with tab_relevant:
-            if relevant_papers:
-                st.caption(f"You've marked {len(relevant_papers)} paper(s) as relevant to your research.")
-                for idx, item in enumerate(relevant_papers, 1):
-                    paper = item["paper"]
-                    note = item["note"]
-                    paper_id = get_consistent_paper_id(paper)
-                    
-                    with st.expander(f"{idx}. **{paper.get('title', 'Untitled')}**", expanded=False):
-                        col_fb1, col_fb2 = st.columns([4, 1])
-                        with col_fb1:
-                            st.markdown(f"**Authors:** {', '.join(paper.get('authors', ['Unknown'])[:3])}")
-                            st.markdown(f"**Journal:** {paper.get('journal', 'N/A')} • **Year:** {paper.get('year', 'N/A')}")
-                            if note:
-                                st.info(f"📝 **Your Note:** {note}")
-                        with col_fb2:
-                            if st.button("View", key=f"view_fb_rel_{paper_id}", use_container_width=True):
-                                st.session_state.selected_paper_id = paper_id
-                                st.rerun()
-            else:
-                st.info("No papers marked as relevant yet. Use the '✅ Relevant' button on paper details to mark papers.")
-        
-        with tab_not_relevant:
-            if not_relevant_papers:
-                st.caption(f"You've marked {len(not_relevant_papers)} paper(s) as not relevant.")
-                for idx, item in enumerate(not_relevant_papers, 1):
-                    paper = item["paper"]
-                    note = item["note"]
-                    paper_id = get_consistent_paper_id(paper)
-                    
-                    with st.expander(f"{idx}. **{paper.get('title', 'Untitled')}**", expanded=False):
-                        col_fb1, col_fb2 = st.columns([4, 1])
-                        with col_fb1:
-                            st.markdown(f"**Authors:** {', '.join(paper.get('authors', ['Unknown'])[:3])}")
-                            st.markdown(f"**Journal:** {paper.get('journal', 'N/A')} • **Year:** {paper.get('year', 'N/A')}")
-                            if note:
-                                st.info(f"📝 **Your Note:** {note}")
-                        with col_fb2:
-                            if st.button("View", key=f"view_fb_notrel_{paper_id}", use_container_width=True):
-                                st.session_state.selected_paper_id = paper_id
-                                st.rerun()
-            else:
-                st.info("No papers marked as not relevant yet.")
 
 # Show continue message after first survey is submitted (before second mode)
 if st.session_state.get('first_survey_submitted') and len(st.session_state.completed_modes) == 1:
