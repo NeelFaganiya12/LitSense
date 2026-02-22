@@ -764,22 +764,48 @@ if st.session_state.show_instructions and not st.session_state.task_completed:
     st.markdown("---")
     
     mode_badge = "🤖 **AI Mode**" if st.session_state.study_mode == "ai" else "📋 **Baseline Mode**"
-    st.info(f"""
-    **Current Mode:** {mode_badge}
     
-    **Your Task:**
-    
-    Please use this interface to find and review papers related to your research topic. 
-    
-    **Steps:**
-    1. Search for papers using the search interface (left column)
-    2. Browse through the results (middle column)
-    3. Click on papers to view details (right column)
-    4. Add relevant papers to your reading list
-    5. Mark papers as relevant or not relevant based on your research needs
-    
-    **Note:** After completing your task, you'll be asked to complete a brief survey about your experience.
-    """)
+    if st.session_state.study_mode == "ai":
+        st.info(f"""
+        **Current Mode:** {mode_badge}
+        
+        **Your Task:**
+        
+        Please use this **AI-assisted interface** to find and review papers related to your research topic. This interface uses artificial intelligence to help you discover and understand relevant papers.
+        
+        **AI Features Available:**
+        - **🤖 Intelligent Clustering**: Papers are automatically organized into thematic clusters (Local Papers mode)
+        - **📊 Relevance Ranking**: Papers are ranked by AI-determined relevance to your search query
+        - **📝 Paper Summarization**: Click "Summarize" to get AI-generated summaries of papers
+        - **🤖 Relevance Explanations**: Click "Explain Relevance" to understand why papers are relevant to your research
+        
+        **Steps:**
+        1. Search for papers using the search interface (left column)
+        2. Browse through the results - papers are ranked by AI-determined relevance (middle column)
+        3. Click on papers to view details (right column)
+        4. Use AI features like "Summarize" and "Explain Relevance" to understand papers better
+        5. Add relevant papers to your reading list
+        6. Mark papers as relevant or not relevant based on your research needs
+        
+        **Note:** After completing your task, you'll be asked to complete a brief survey about your experience.
+        """)
+    else:
+        st.info(f"""
+        **Current Mode:** {mode_badge}
+        
+        **Your Task:**
+        
+        Please use this interface to find and review papers related to your research topic. 
+        
+        **Steps:**
+        1. Search for papers using the search interface (left column)
+        2. Browse through the results (middle column)
+        3. Click on papers to view details (right column)
+        4. Add relevant papers to your reading list
+        5. Mark papers as relevant or not relevant based on your research needs
+        
+        **Note:** After completing your task, you'll be asked to complete a brief survey about your experience.
+        """)
     
     if st.button("✅ I understand, start the task", use_container_width=True, type="primary"):
         st.session_state.show_instructions = False
